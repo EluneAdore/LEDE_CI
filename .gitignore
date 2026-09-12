@@ -1,0 +1,21 @@
+# 本地编译产物与临时工作区
+build_dir/
+lede/
+bin/
+dl/
+output/
+
+# 临时与日志文件
+*.tmp
+*.log
+*.swp
+*~
+.DS_Store
+
+# 磁盘镜像与归档文件
+*.img
+*.img.gz
+*.iso
+*.qcow2
+*.vmdk
+*.manifest

@@ -1,0 +1,250 @@
+name: 编译 LEDE 固件
+
+'on':
+  repository_dispatch:
+  workflow_dispatch:
+    inputs:
+      upload_release:
+        description: '发布固件到 Release'
+        required: false
+        default: false
+        type: boolean
+      upload_artifacts:
+        description: '上传固件到 Artifacts'
+        required: false
+        default: 'true'
+        type: boolean
+      ssh_debug:
+        description: '编译失败时开启 SSH 调试'
+        required: false
+        default: 'false'
+        type: boolean
+  schedule:
+    - cron: '23 18 * * *' # 每天 UTC 18:23 (北京时间凌晨 02:23) 自动触发编译
+# push:
+#   branches:
+#     - main
+#     - master
+#   paths:
+#     - 'config/**'
+#     - 'files/**'
+#     - 'scripts/**'
+#     - '.github/workflows/**'
+
+permissions:
+  contents: write
+
+env:
+  REPO_URL: https://github.com/coolsnowwolf/lede.git
+  REPO_BRANCH: master
+  CONFIG_FILE: config/LEDE.config
+  CUSTOM_FEEDS_SH: scripts/custom_feeds.sh
+  FILES_DIR: files
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    name: 编译固件
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: 检出代码仓库
+        uses: actions/checkout@v5
+
+      - name: 恢复上次清单缓存
+        uses: actions/cache/restore@v5
+        with:
+          path: /tmp/manifest_cache
+          key: lede-manifest-${{ github.run_id }}
+          restore-keys: |
+            lede-manifest-
+
+
+      - name: 初始化编译环境
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-mark hold grub-efi-amd64-signed
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install -y \
+            ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
+            bzip2 ccache clang cmake cpio curl device-tree-compiler fastjar flex gawk genisoimage gettext \
+            gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 \
+            libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev \
+            libncurses-dev libpython3-dev libreadline-dev libssl-dev libtool \
+            lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full patch pigz pkgconf python3 \
+            python3-pip python3-ply python3-docutils python3-pyelftools python3-setuptools qemu-utils \
+            rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
+          sudo -E apt-get -qq autoremove --purge
+          sudo -E apt-get -qq clean
+          sudo timedatectl set-timezone "$TZ"
+          sudo mkdir -p /workdir
+          sudo chown $USER:$GROUPS /workdir
+
+      - name: 检查初始磁盘空间
+        run: |
+          echo "======================="
+          echo "Filesystem Space Usage:"
+          echo "======================="
+          df -hT
+
+      - name: 克隆 LEDE 源码
+        working-directory: /workdir
+        run: |
+          git clone --depth 1 -b $REPO_BRANCH $REPO_URL lede
+          ln -sf /workdir/lede $GITHUB_WORKSPACE/lede
+
+      - name: 加载自定义 Feeds 软件源
+        run: |
+          [ -e $CUSTOM_FEEDS_SH ] && chmod +x $CUSTOM_FEEDS_SH
+          cd lede
+          $GITHUB_WORKSPACE/$CUSTOM_FEEDS_SH
+
+      - name: 更新与安装 Feeds 扩展
+        run: |
+          cd lede
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: 加载自定义配置与覆盖文件
+        run: |
+          [ -e $CONFIG_FILE ] && cp $CONFIG_FILE lede/.config
+          [ -d $FILES_DIR ] && cp -r $FILES_DIR lede/
+          cd lede
+          make defconfig
+
+      - name: 预下载依赖软件包 (make download)
+        id: package
+        run: |
+          cd lede
+          make download -j16
+          find dl -size -1024c -exec ls -l {} \;
+          find dl -size -1024c -exec rm -f {} \;
+
+      - name: 开始编译固件
+        id: compile
+        run: |
+          cd lede
+          echo -e "$(nproc) thread compile"
+          make -j$(nproc) || make -j1 || make -j1 V=s
+          echo "status=success" >> $GITHUB_OUTPUT
+
+      - name: 编译失败时启动 SSH 终端调试
+        if: ${{ failure() && (github.event.inputs.ssh_debug == 'true' || env.SSH_DEBUG == 'true') }}
+        uses: mxschmitt/action-tmate@v3
+
+      - name: 检查编译后磁盘空间占用
+        if: (!cancelled())
+        run: |
+          echo "======================="
+          echo "Filesystem Space Usage:"
+          echo "======================="
+          df -hT
+          echo "======================="
+          echo "LEDE Directory Space Breakdown:"
+          echo "======================="
+          cd lede
+          du -h --max-depth=1 ./ --exclude=build_dir --exclude=bin
+          du -h --max-depth=1 ./build_dir
+          du -h --max-depth=1 ./bin
+
+      - name: 整理固件打包产物
+        id: organize
+        if: steps.compile.outputs.status == 'success' && !cancelled()
+        run: |
+          cd lede/bin/targets/*/*
+          rm -rf packages
+          rm -f *.buildinfo
+
+          DATE_TAG="$(date +'%Y%m%d-%H%M')"
+          TIME_TAG="$(date +'%Y.%m.%d-%H%M')"
+          echo "BUILD_DATE=$DATE_TAG" >> $GITHUB_ENV
+          echo "BUILD_TIME=$TIME_TAG" >> $GITHUB_ENV
+
+          # 重命名主固件：保留 generic-squashfs-combined 字段并注入构建日期时间
+          for file in openwrt-*-combined-efi.img.gz; do
+            if [ -f "$file" ]; then
+              new_name="$(echo "$file" | sed -e "s/^openwrt/lede/" -e "s/\.img\.gz$/-${DATE_TAG}.img.gz/")"
+              mv -f "$file" "$new_name"
+              # 使用 pigz -9 多线程极限压缩，进一步削减固件体积
+              gzip -dc "$new_name" | pigz -9 > "${new_name}.tmp" && mv -f "${new_name}.tmp" "$new_name"
+            fi
+          done
+
+          # 规范化软件包清单文件名称
+          for mf in openwrt-*.manifest; do
+            if [ -f "$mf" ]; then
+              cp -f "$mf" packages-manifest.txt
+              break
+            fi
+          done
+
+          echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
+
+          # 软件包清单差分比对 (对比上次构建，并写入 Step Summary)
+          python3 $GITHUB_WORKSPACE/scripts/diff_manifest.py \
+            /tmp/manifest_cache/*.manifest \
+            packages-manifest.txt \
+            --output-diff manifest-diff.txt \
+            --summary || true
+
+          # 生成 SHA256 校验文件 (针对最终重命名后的固件生成，带 .txt 后缀)
+          sha256sum *combined-efi*.img.gz > sha256sums.txt 2>/dev/null || true
+
+          # 准备缓存文件
+          mkdir -p /tmp/manifest_cache
+          rm -f /tmp/manifest_cache/*
+          cp -f packages-manifest.txt /tmp/manifest_cache/last.manifest 2>/dev/null || true
+
+          # 清理原 openwrt 冗余文件，确保产物目录纯净
+          rm -f openwrt-*
+
+          echo "status=success" >> $GITHUB_OUTPUT
+
+      - name: 保存本次清单缓存
+        uses: actions/cache/save@v5
+        if: steps.compile.outputs.status == 'success' && !cancelled()
+        with:
+          path: /tmp/manifest_cache
+          key: lede-manifest-${{ github.run_id }}
+
+      - name: 上传固件至 GitHub Artifacts
+        uses: actions/upload-artifact@v6
+        if: steps.organize.outputs.status == 'success' && (github.event.inputs.upload_artifacts != 'false')
+        with:
+          name: LEDE-x86_64-EFI-${{ env.BUILD_TIME }}
+          compression-level: 9
+          path: |
+            ${{ env.FIRMWARE_PATH }}/*combined-efi*.img.gz
+            ${{ env.FIRMWARE_PATH }}/sha256sums.txt
+            ${{ env.FIRMWARE_PATH }}/packages-manifest.txt
+            ${{ env.FIRMWARE_PATH }}/manifest-diff.txt
+
+      - name: 生成 Release 发布信息
+        id: tag
+        if: steps.organize.outputs.status == 'success' && github.event.inputs.upload_release == 'true'
+        run: |
+          TAG_NAME="v${{ env.BUILD_TIME }}"
+          echo "release_tag=$TAG_NAME" >> $GITHUB_OUTPUT
+          touch release.txt
+          echo "### 🚀 LEDE x86_64 固件构建完成" >> release.txt
+          echo "- **架构**: x86_64 Generic (EFI Boot)" >> release.txt
+          echo "- **默认管理 IP**: 192.168.2.1" >> release.txt
+          echo "- **IPv6**: 默认全局禁用" >> release.txt
+          echo "- **构建时间**: $(date +'%Y-%m-%d %H:%M:%S')" >> release.txt
+          echo "- **内置核心组件**: SSR-Plus (Xray, Mihomo), SQM, TTYD" >> release.txt
+          echo "status=success" >> $GITHUB_OUTPUT
+
+      - name: 发布固件至 GitHub Releases
+        uses: softprops/action-gh-release@v2
+        if: steps.tag.outputs.status == 'success' && !cancelled()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.tag.outputs.release_tag }}
+          body_path: release.txt
+          files: |
+            ${{ env.FIRMWARE_PATH }}/*combined-efi*.img.gz
+            ${{ env.FIRMWARE_PATH }}/sha256sums.txt
+            ${{ env.FIRMWARE_PATH }}/packages-manifest.txt
+            ${{ env.FIRMWARE_PATH }}/manifest-diff.txt
