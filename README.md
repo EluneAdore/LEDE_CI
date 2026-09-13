@@ -70,26 +70,15 @@ LEDE_CI/
 
 ### 方式一：GitHub Actions 云端编译（推荐）
 
-1. **推送仓库**：
-   ```bash
-   cd LEDE_CI
-   git init
-   git add .
-   git commit -m "feat: init lede_ci repository"
-   git remote add origin <你的 GitHub 仓库地址>
-   git branch -M main
-   git push -u origin main
-   ```
-2. **触发编译**：
-   * **定时自动触发**：已配置为**每天北京时间凌晨 02:23**（UTC 18:23）自动触发编译。
-   * **手动按需触发**：
-     * 进入 GitHub 仓库页面 -> **Actions** 标签。
-     * 选择 **编译 LEDE 固件** 工作流。
-     * 点击 **Run workflow**：
-       * `发布固件到 Release`: 发布为 GitHub Release（默认关闭）。
-       * `上传固件到 Artifacts`: 保存到 Actions Artifacts（默认开启）。
-       * `编译失败时开启 SSH 调试`: 编译失败时启动 SSH 终端远程调试。
-3. **获取固件与首次登录**：
+1. **Fork 本仓库**：
+   * 点击页面右上角 **`Fork`** 按钮，将本项目复制到你的 GitHub 个人账号下。
+2. **启用工作流**：
+   * 进入你 Fork 后的仓库，点击顶部 **`Actions`** 选项卡。
+   * 点击绿色按钮 **`I understand my workflows, go ahead and enable them`** 启用云端构建。
+3. **触发编译**：
+   * **手动按需触发**：在 Actions 页面点击左侧 **编译 LEDE 固件** -> 点击右侧 **Run workflow** 按钮即可开跑。
+   * **定时自动触发**：工作流已预置每天北京时间凌晨 02:23 自动拉取 Lean 最新源码静默构建。
+4. **获取固件与首次登录**：
    * **固件下载**：构建成功后可在 Actions Artifacts（或 GitHub Releases）下载形如 `LEDE-x86_64-EFI-YYYY.MM.DD-HHMM.zip` 的压缩包（经 `pigz -9` 全核极限压实）。
    * **压缩包内包含 4 个核心文件**：
      * `lede-x86-64-generic-squashfs-combined-efi-YYYYMMDD-HHMM.img.gz`：带有精准构建时间戳的 EFI 主固件镜像
