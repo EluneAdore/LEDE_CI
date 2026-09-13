@@ -61,8 +61,6 @@ fi
 echo ">> 更新并安装 Feeds ..."
 ./scripts/feeds update -a
 ./scripts/feeds install -a
-# 修复 coolsnowwolf/luci 中 dnsmasq 特性检测正则缺陷导致 Web 界面隐藏 DHCP 选项的 Bug
-sed -i 's/\/^Compile time options: (.+)$\/s/\/Compile time options: ([^\\n]+)\//' feeds/luci/modules/luci-base/root/usr/share/rpcd/ucode/luci 2>/dev/null || true
 
 # 6. 同步配置文件
 echo ">> 注入 config/LEDE.config ..."
