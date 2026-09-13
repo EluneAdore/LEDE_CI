@@ -26,9 +26,9 @@
 | :--- | :--- |
 | **系统底座** | • **架构与内核**：x86_64 Generic，Linux 6.18 LTS 内核（物理机 / ESXi / PVE / Hyper-V 通用）<br>• **引导与分区**：纯 UEFI 引导（GRUB 倒计时 0 秒秒启），内核分区 64MB，系统根分区 2048MB<br>• **文件系统**：SquashFS（只读断电防损坏）+ Ext4 / F2FS 固态友好支持<br>• **CPU 微码**：内置 Intel / AMD 官方微码补丁 (`intel-microcode` / `amd64-microcode`) |
 | **全能网卡驱动** | • **Intel**：千兆 (`e1000e` / `igb`)、2.5G (`igc` I225/I226)、万兆及 40G (`ixgbe` / `i40e`)<br>• **Realtek 瑞昱**：官方千兆 `r8168`，多队列并发 RSS（`r8125-rss` 2.5G / `r8126-rss` 5G / `r8127-rss` 10G）<br>• **高速光卡与虚拟网卡**：Aquantia AQC107、Mellanox ConnectX-3/4/5 (`mlx4`/`mlx5`)、VMware `vmxnet3` 等<br>• **USB 网卡**：亚信 AX88179/A 千兆、AQC111 等<br>• **Wi-Fi 6/6E**：联发科 MT7921 / MT7922 / MT7920 (`kmod-mt7921e` 驱动与固件微码，搭配 `wpad-openssl` 完整支持 WPA3 与 AP/STA 模式) |
-| **核心功能与插件** | • `luci-app-ssr-plus`：科学代理工具（集成 Xray、Mihomo、GeoIP/GeoSite 规则与 TProxy 透明代理）<br>• `luci-app-sqm`：智能队列流量整形（CAKE 调度算法，消除 Bufferbloat 缓冲膨胀）<br>• `luci-app-ttyd`：网页终端（免客户端，浏览器直接使用 Shell）<br>• `luci-app-package-manager`：软件包管理器（Web 端在线安装与管理 ipk 插件）<br>• `luci-app-firewall`：防火墙管理，内置 **FullCone NAT (NAT1)** 优化游戏与 P2P 穿透<br>• `luci-app-uhttpd`：Web 服务器与 SSL 证书管理<br>• **系统监控助手**：`autocore-x86` + `lm-sensors`（首页实时 CPU 温度与主频）、`nlbwmon`（带宽统计）、`ethtool`、`cfdisk` |
+| **核心功能与插件** | • `luci-app-ssr-plus`：网络代理与分流工具（集成 Xray、Mihomo、GeoIP/GeoSite 规则与 TProxy 透明代理）<br>• `luci-app-sqm`：智能队列流量整形（CAKE 调度算法，消除 Bufferbloat 缓冲膨胀）<br>• `luci-app-ttyd`：网页终端（免客户端，浏览器直接使用 Shell）<br>• `luci-app-package-manager`：软件包管理器（Web 端在线安装与管理 ipk 插件）<br>• `luci-app-firewall`：防火墙管理，内置 **FullCone NAT (NAT1)** 优化游戏与 P2P 穿透<br>• `luci-app-uhttpd`：Web 服务器与 SSL 证书管理<br>• **系统监控助手**：`autocore-x86` + `lm-sensors`（首页实时 CPU 温度与主频）、`nlbwmon`（带宽统计）、`ethtool`、`cfdisk` |
 | **界面主题** | `luci-theme-design`（现代化自适应深色主题）、`luci-theme-bootstrap`（经典主题） |
-| **轻量精简设计** | ❌ **剔除 GPU 显卡微码与 DRM 驱动**：软路由接显示器走标准 Framebuffer 纯字符终端<br>❌ **剔除 NaiveProxy 源码编译**：大幅缩短 CI 构建耗时，需用时可在 Web 后台在线一键安装<br>❌ **剔除 block-mount**：保持界面简洁，不自动挂载非必要外接存储设备 |
+| **轻量精简设计** | ❌ **剔除 GPU 显卡微码与 DRM 驱动**：主机接显示器走标准 Framebuffer 纯字符终端<br>❌ **剔除 NaiveProxy 源码编译**：大幅缩短 CI 构建耗时，需用时可在 Web 后台在线一键安装<br>❌ **剔除 block-mount**：保持界面简洁，不自动挂载非必要外接存储设备 |
 
 ---
 
@@ -86,28 +86,31 @@ LEDE_CI/
 
 ---
 
-## 💡 联动私有 DNS / AdGuard Home（全屋设备审计与去广告）
+## 💡 联动私有 DNS / AdGuard Home（设备行为审计与去广告）
 
-如果内网部署了独立 NAS（如 fnOS、群晖、TrueNAS）并运行了 Docker 版 AdGuard Home，推荐让软路由通过 **DHCP Option 6** 将该 DNS 广播给全屋设备，实现各设备独立行为监控与全屋广告过滤。
+如果内网部署了独立的私有 DNS 服务器（如 AdGuard Home、Pi-hole 等），可在 LEDE 的 Web 界面中通过 **DHCP Option 6** 将该 DNS 广播给局域网所有设备，实现设备行为审计与全网广告过滤。
 
 > [!TIP]
-> **安全与隐私规范**：为保护家庭内网拓扑隐私，本固件**默认保持通用纯净**，严禁在固件源码中硬编码私有 IP。请直接在软路由本地终端执行以下配置：
+> **安全与隐私规范**：为保护家庭内网拓扑隐私，本固件**默认保持通用纯净**，严禁在固件源码中硬编码私有 IP。本固件已修复 LuCI 选项隐藏缺陷，直接在 LEDE 的 Web 界面配置即可：
 
-登录软路由 Web 后台，进入【系统】->【终端】（或 SSH 登录），执行以下命令（**请将 `192.168.2.X` 替换为你 NAS / DNS 服务器的真实内网 IP**）：
+### Web 界面设置步骤：
 
-```bash
-# 1. 向全屋客户端广播指定内网 DNS 服务器
-uci add_list dhcp.lan.dhcp_option='6,192.168.2.X'
-uci add_list dhcp.lan.dns='192.168.2.X'
+1. **进入 LAN 接口配置**：
+   - 登录 LEDE 后台，进入 **【网络】 -> 【接口】**；
+   - 在 **LAN** 接口右侧点击 **【修改】**。
+2. **配置 DHCP Option 6**：
+   - 滑动至下方 **【DHCP 服务器】** 区域，切换至 **【高级设置】** 选项卡；
+   - 找到 **【DHCP 选项】** 输入框，输入：
+     ```text
+     6,<AdGuard服务器IP>
+     ```
+     *（注：开头的 `6,` 为 DHCP Option 6 规范标识，后接你的 AdGuard 服务器实际 IP 地址）*；
+   - 点击输入框右侧的 **【➕】** 添加该条目。
+3. **生效配置**：
+   - 点击对话框右下角的 **【保存】**，随后在页面右上角点击 **【保存并应用】**。
 
-# 2. 提交保存至本地闪存
-uci commit dhcp
-
-# 3. 重启生效
-/etc/init.d/dnsmasq restart
-```
-
-*注：配置保存在物理路由器本地可写闪存中，断电重启不丢失，后续固件“保留配置升级”亦可全自动继承。*
+> [!IMPORTANT]
+> **与代理分流服务联动提醒**：局域网客户端通过 Option 6 直连 AdGuard Home 后，请在 **AdGuard Home Web 后台** 的【设置】->【DNS 设置】->【上游 DNS 服务器】中填入 **`<LEDE后台IP>:53`**。由 AdGuard Home 负责各设备去广告与行为审计，再由 LEDE 负责境外分流与解析，避免境外网站无法解析。
 
 ---
 
