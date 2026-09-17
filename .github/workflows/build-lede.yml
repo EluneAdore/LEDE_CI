@@ -4,15 +4,10 @@ name: 编译 LEDE 固件
   repository_dispatch:
   workflow_dispatch:
     inputs:
-      upload_release:
-        description: '发布固件到 Release'
-        required: false
+      publish_release:
+        description: '编译成功后发布 GitHub Release'
+        required: true
         default: false
-        type: boolean
-      upload_artifacts:
-        description: '上传固件到 Artifacts'
-        required: false
-        default: true
         type: boolean
       ssh_debug:
         description: '编译失败时开启 SSH 调试'
@@ -291,10 +286,10 @@ jobs:
 
       - name: 上传固件至 GitHub Artifacts
         uses: actions/upload-artifact@v6
-        if: steps.organize.outputs.status == 'success' && (github.event.inputs.upload_artifacts != 'false')
+        if: steps.organize.outputs.status == 'success' && !cancelled()
         with:
           name: LEDE-x86_64-EFI-${{ env.BUILD_TIME }}
-          compression-level: 9
+          compression-level: 0
           path: |
             ${{ env.FIRMWARE_PATH }}/*combined-efi*.img.gz
             ${{ env.FIRMWARE_PATH }}/sha256sums.txt
@@ -304,7 +299,7 @@ jobs:
 
       - name: 生成 Release 发布信息
         id: tag
-        if: steps.organize.outputs.status == 'success' && github.event.inputs.upload_release == 'true'
+        if: steps.organize.outputs.status == 'success' && github.event_name == 'workflow_dispatch' && inputs.publish_release
         run: |
           TAG_NAME="v${{ env.BUILD_TIME }}"
           echo "release_tag=$TAG_NAME" >> $GITHUB_OUTPUT
@@ -319,7 +314,7 @@ jobs:
 
       - name: 发布固件至 GitHub Releases
         uses: softprops/action-gh-release@v2
-        if: steps.tag.outputs.status == 'success' && !cancelled()
+        if: ${{ steps.tag.outputs.status == 'success' && !cancelled() && github.event_name == 'workflow_dispatch' && inputs.publish_release }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
