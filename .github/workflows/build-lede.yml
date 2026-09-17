@@ -17,8 +17,8 @@ run-name: >-
         default: false
         type: boolean
   schedule:
-    # 每天北京时间 (UTC+8) 下午 12:15 准时自动触发构建 (即 04:15 UTC)
-    - cron: '15 4 * * *'
+    # 每天北京时间 (UTC+8) 上午 07:11 自动触发构建 (即 23:11 UTC)
+    - cron: '11 23 * * *'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
