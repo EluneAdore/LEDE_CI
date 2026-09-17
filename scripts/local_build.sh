@@ -68,15 +68,36 @@ echo ">> 固定使用 helloworld 软件源提供的 xray-core..."
 ./scripts/feeds uninstall xray-core
 ./scripts/feeds install -f -p helloworld xray-core
 
-# 校验 xray-core 来源必须为 helloworld
-XRAY_PATH="$(readlink -f package/feeds/*/xray-core 2>/dev/null || true)"
-echo ">> 生效的 xray-core 路径: ${XRAY_PATH}"
-if [[ "${XRAY_PATH}" != *"/feeds/helloworld/"* ]]; then
-    echo "❌ 错误: xray-core 来源校验失败，预期来源为 helloworld，实际为: ${XRAY_PATH}"
+# 严格校验 xray-core 来源必须且仅为 helloworld
+if [ ! -L package/feeds/helloworld/xray-core ]; then
+    echo "❌ 错误: 未找到 helloworld feed 的 xray-core 软链接 (package/feeds/helloworld/xray-core)"
     exit 1
 fi
+
+if [ -e package/feeds/packages/xray-core ] || [ -L package/feeds/packages/xray-core ]; then
+    echo "❌ 错误: packages feed 的 xray-core 依然存在，未被完全移除"
+    exit 1
+fi
+
+XRAY_PATH="$(readlink -f package/feeds/helloworld/xray-core)"
+EXPECTED_PATH="$(readlink -f feeds/helloworld/xray-core)"
+echo ">> 生效的 xray-core 路径: ${XRAY_PATH}"
+if [ -z "${XRAY_PATH}" ] || [ "${XRAY_PATH}" != "${EXPECTED_PATH}" ]; then
+    echo "❌ 错误: xray-core 真实路径异常，预期为: ${EXPECTED_PATH}，实际为: ${XRAY_PATH}"
+    exit 1
+fi
+
+if [ ! -f "${XRAY_PATH}/Makefile" ]; then
+    echo "❌ 错误: 未找到 xray-core 的 Makefile: ${XRAY_PATH}/Makefile"
+    exit 1
+fi
+
 XRAY_VER="$(grep -m1 '^PKG_VERSION:=' "${XRAY_PATH}/Makefile" | cut -d= -f2)"
-echo "✅ xray-core 来源校验通过 (helloworld feed, 版本: ${XRAY_VER})"
+if [ -z "${XRAY_VER}" ]; then
+    echo "❌ 错误: 无法从 ${XRAY_PATH}/Makefile 解析 PKG_VERSION"
+    exit 1
+fi
+echo "✅ xray-core 来源与版本校验通过 (helloworld feed, 路径: ${XRAY_PATH}, 版本: ${XRAY_VER})"
 
 # 6. 同步配置文件
 echo ">> 注入 config/custom.config ..."
