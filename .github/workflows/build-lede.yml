@@ -1,4 +1,4 @@
-name: 编译 LEDE 固件
+name: LEDE-CI
 
 'on':
   repository_dispatch:
