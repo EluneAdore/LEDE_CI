@@ -5,7 +5,7 @@ OpenWrt / LEDE Manifest 差异对比工具
 用途:
 1. 对比上一次与本次编译生成的 *.manifest 软件包清单
 2. 输出新增、移除、升级/降级的软件包列表
-3. 生成 manifest.diff 文件，并输出 Markdown 表格至 $GITHUB_STEP_SUMMARY
+3. 生成 manifest-diff.txt 文件，并输出 Markdown 表格至 $GITHUB_STEP_SUMMARY
 """
 
 import sys
@@ -79,8 +79,8 @@ def build_markdown_report(added, removed, changed, unchanged, curr_count, is_fir
     lines.append("")
 
     if is_first_run:
-        lines.append("> ℹ️ **首次构建或未检测到上次清单缓存**")
-        lines.append(f"> 本次构建共包含 **{curr_count}** 个软件包，已自动保存为下次比对基准。")
+        lines.append("> ℹ️ **首次构建或未检测到历史清单**")
+        lines.append(f"> 本次构建共包含 **{curr_count}** 个软件包，已作为后续比对基线版本。")
         lines.append("")
         return "\n".join(lines)
 

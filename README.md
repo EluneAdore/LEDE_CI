@@ -70,6 +70,7 @@ LEDE_CI/
      * `sha256sums.txt`：SHA256 哈希校验文件
      * `packages-manifest.txt`：全量已安装软件包清单
      * `manifest-diff.txt`：与上一次构建的软件包变动对比报告
+     * `*.buildinfo`：固件配置 (`config.buildinfo`)、软件源快照 (`feeds.buildinfo`) 与版本信息 (`version.buildinfo`) 可追溯文件
    * 构建完成后，在 Actions 页面的 **Step Summary** 可直接查看软件包变动的可视化表格。
 
 ---

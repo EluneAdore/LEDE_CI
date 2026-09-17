@@ -12,25 +12,20 @@ name: 编译 LEDE 固件
       upload_artifacts:
         description: '上传固件到 Artifacts'
         required: false
-        default: 'true'
+        default: true
         type: boolean
       ssh_debug:
         description: '编译失败时开启 SSH 调试'
         required: false
-        default: 'false'
+        default: false
         type: boolean
   schedule:
     # 每天北京时间 (UTC+8) 下午 12:15 准时自动触发构建 (即 04:15 UTC)
     - cron: '15 4 * * *'
-# push:
-#   branches:
-#     - main
-#     - master
-#   paths:
-#     - 'config/**'
-#     - 'files/**'
-#     - 'scripts/**'
-#     - '.github/workflows/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -52,15 +47,6 @@ jobs:
       - name: 检出代码仓库
         uses: actions/checkout@v5
 
-      - name: 恢复上次清单缓存
-        uses: actions/cache/restore@v5
-        with:
-          path: /tmp/manifest_cache
-          key: lede-manifest-${{ github.run_id }}
-          restore-keys: |
-            lede-manifest-
-
-
       - name: 初始化编译环境
         env:
           DEBIAN_FRONTEND: noninteractive
@@ -75,7 +61,7 @@ jobs:
             libncurses-dev libpython3-dev libreadline-dev libssl-dev libtool \
             lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full patch pigz pkgconf python3 \
             python3-pip python3-ply python3-docutils python3-pyelftools python3-setuptools qemu-utils \
-            rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
+            rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
           sudo -E apt-get -qq autoremove --purge
           sudo -E apt-get -qq clean
           sudo timedatectl set-timezone "$TZ"
@@ -105,7 +91,7 @@ jobs:
         run: |
           cd lede
           ./scripts/feeds update -a
-          ./scripts/feeds install -a      
+          ./scripts/feeds install -a
 
       - name: 加载自定义配置与覆盖文件
         run: |
@@ -114,20 +100,108 @@ jobs:
           cd lede
           make defconfig
 
-      - name: 预下载依赖软件包 (make download)
+      - name: 预下载依赖软件包并校验完整性 (make download)
         id: package
         run: |
           cd lede
-          make download -j16
-          find dl -size -1024c -exec ls -l {} \;
-          find dl -size -1024c -exec rm -f {} \;
+          echo "=== 开始预下载依赖软件包 ==="
+          MAX_RETRIES=3
+          DOWNLOAD_OK=0
+          for attempt in $(seq 1 $MAX_RETRIES); do
+            echo ">>> [尝试 $attempt/$MAX_RETRIES] 执行 make download ..."
+            DL_OK=0
+            if make download -j16 || make download -j1; then
+              DL_OK=1
+            else
+              echo "::warning::make download 返回非零退出码。"
+            fi
+
+            echo ">>> 清理 0 字节空文件与临时锁文件..."
+            find dl -type f -size 0c -exec rm -vf {} + 2>/dev/null || true
+            find dl -type f \( -name '*.dl' -o -name '*.hash' \) -exec rm -vf {} + 2>/dev/null || true
+
+            CORRUPTED=0
+
+            # 1. 重点检测 linux-firmware 归档完整性
+            for lf in $(find dl -type f -name 'linux-firmware-*.tar.xz' 2>/dev/null); do
+              if ! xz -t "$lf" >/dev/null 2>&1; then
+                echo "::error::发现损坏的 linux-firmware 归档: $lf，立即删除以触发重下..."
+                rm -f "$lf"
+                CORRUPTED=1
+              fi
+            done
+
+            # 2. 依次校验各类压缩归档完整性
+            for f in $(find dl -type f \( -name '*.xz' -o -name '*.txz' \) 2>/dev/null); do
+              if ! xz -t "$f" >/dev/null 2>&1; then
+                echo "::warning::损坏的 XZ 压缩包: $f，已清除"
+                rm -f "$f"
+                CORRUPTED=1
+              fi
+            done
+
+            for f in $(find dl -type f \( -name '*.gz' -o -name '*.tgz' \) 2>/dev/null); do
+              if ! gzip -t "$f" >/dev/null 2>&1; then
+                echo "::warning::损坏的 GZ 压缩包: $f，已清除"
+                rm -f "$f"
+                CORRUPTED=1
+              fi
+            done
+
+            for f in $(find dl -type f \( -name '*.bz2' -o -name '*.tbz2' \) 2>/dev/null); do
+              if ! bzip2 -t "$f" >/dev/null 2>&1; then
+                echo "::warning::损坏的 BZ2 压缩包: $f，已清除"
+                rm -f "$f"
+                CORRUPTED=1
+              fi
+            done
+
+            for f in $(find dl -type f \( -name '*.zst' -o -name '*.tzst' \) 2>/dev/null); do
+              if ! zstd -t "$f" >/dev/null 2>&1; then
+                echo "::warning::损坏的 ZST 压缩包: $f，已清除"
+                rm -f "$f"
+                CORRUPTED=1
+              fi
+            done
+
+            for f in $(find dl -type f -name '*.zip' 2>/dev/null); do
+              if ! unzip -t -q "$f" >/dev/null 2>&1; then
+                echo "::warning::损坏的 ZIP 压缩包: $f，已清除"
+                rm -f "$f"
+                CORRUPTED=1
+              fi
+            done
+
+            if [ "$DL_OK" -eq 1 ] && [ "$CORRUPTED" -eq 0 ]; then
+              echo "✅ make download 退出成功且所有下载归档完整性校验通过！"
+              DOWNLOAD_OK=1
+              echo "status=success" >> $GITHUB_OUTPUT
+              break
+            else
+              if [ "$attempt" -eq "$MAX_RETRIES" ]; then
+                echo "::error::经过 $MAX_RETRIES 次重试后下载或校验仍未全部通过，终止构建。"
+                exit 1
+              fi
+              echo "⚠️ 检测到下载失败或部分损坏归档已清理，准备重新下载..."
+              sleep 2
+            fi
+          done
+
+          if [ "$DOWNLOAD_OK" -ne 1 ]; then
+            echo "::error::依赖下载未成功完成，禁止进入正式编译。"
+            exit 1
+          fi
 
       - name: 开始编译固件
         id: compile
         run: |
           cd lede
           echo -e "$(nproc) thread compile"
-          make -j$(nproc) || make -j1 || make -j1 V=s
+          if ! make -j$(nproc); then
+            echo "::warning::多线程编译失败，正在自动回退至单线程诊断模式 (V=s)..."
+            set -o pipefail
+            make -j1 V=s 2>&1 | tee /tmp/build_error.log
+          fi
           echo "status=success" >> $GITHUB_OUTPUT
 
       - name: 编译失败时启动 SSH 终端调试
@@ -144,18 +218,17 @@ jobs:
           echo "======================="
           echo "LEDE Directory Space Breakdown:"
           echo "======================="
-          cd lede
-          du -h --max-depth=1 ./ --exclude=build_dir --exclude=bin
-          du -h --max-depth=1 ./build_dir
-          du -h --max-depth=1 ./bin
+          du -sh lede/dl 2>/dev/null || true
+          du -sh lede/build_dir 2>/dev/null || true
+          du -sh lede/staging_dir 2>/dev/null || true
+          du -sh lede/bin 2>/dev/null || true
 
-      - name: 整理固件打包产物
+      - name: 整理固件打包产物与可追溯信息
         id: organize
         if: steps.compile.outputs.status == 'success' && !cancelled()
         run: |
           cd lede/bin/targets/*/*
           rm -rf packages
-          rm -f *.buildinfo
 
           DATE_TAG="$(date +'%Y%m%d-%H%M')"
           TIME_TAG="$(date +'%Y.%m.%d-%H%M')"
@@ -167,8 +240,10 @@ jobs:
             if [ -f "$file" ]; then
               new_name="$(echo "$file" | sed -e "s/^openwrt/lede/" -e "s/\.img\.gz$/-${DATE_TAG}.img.gz/")"
               mv -f "$file" "$new_name"
-              # 使用 pigz -9 多线程极限压缩，进一步削减固件体积
-              gzip -dc "$new_name" | pigz -9 > "${new_name}.tmp" && mv -f "${new_name}.tmp" "$new_name"
+              # 使用 pigz/gzip 多线程极限压缩，进一步削减固件体积
+              if command -v pigz >/dev/null 2>&1; then
+                gzip -dc "$new_name" | pigz -9 > "${new_name}.tmp" && mv -f "${new_name}.tmp" "$new_name"
+              fi
             fi
           done
 
@@ -180,34 +255,39 @@ jobs:
             fi
           done
 
+          # 规范化并保留构建追溯文件 (config.buildinfo, feeds.buildinfo, version.buildinfo)
+          for bf in openwrt-*.buildinfo; do
+            if [ -f "$bf" ]; then
+              base_bf="$(echo "$bf" | sed -E 's/^openwrt-[^-]+-[^-]+-[^-]+-//')"
+              cp -f "$bf" "$base_bf"
+            fi
+          done
+
           echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
 
-          # 软件包清单差分比对 (对比上次构建，并写入 Step Summary)
+          # 获取上一个 Release 的历史 manifest (若存在)
+          mkdir -p /tmp/history_manifest
+          if command -v gh >/dev/null 2>&1; then
+            echo ">> 尝试通过 GitHub CLI 从最新 Release 获取历史 packages-manifest.txt..."
+            GH_TOKEN="${{ secrets.GITHUB_TOKEN }}" gh release download \
+              --pattern "packages-manifest.txt" \
+              --dir /tmp/history_manifest 2>/dev/null || true
+          fi
+
+          # 软件包清单差分比对 (对比历史 Release，并写入 Step Summary)
           python3 $GITHUB_WORKSPACE/scripts/diff_manifest.py \
-            /tmp/manifest_cache/*.manifest \
+            /tmp/history_manifest/packages-manifest.txt \
             packages-manifest.txt \
             --output-diff manifest-diff.txt \
-            --summary || true
+            --summary
 
           # 生成 SHA256 校验文件 (针对最终重命名后的固件生成，带 .txt 后缀)
           sha256sum *combined-efi*.img.gz > sha256sums.txt 2>/dev/null || true
 
-          # 准备缓存文件
-          mkdir -p /tmp/manifest_cache
-          rm -f /tmp/manifest_cache/*
-          cp -f packages-manifest.txt /tmp/manifest_cache/last.manifest 2>/dev/null || true
-
-          # 清理原 openwrt 冗余文件，确保产物目录纯净
-          rm -f openwrt-*
+          # 清理原 openwrt 临时中间文件，确保产物目录纯净 (保留 buildinfo)
+          rm -f openwrt-*.img* openwrt-*.manifest openwrt-*.bin
 
           echo "status=success" >> $GITHUB_OUTPUT
-
-      - name: 保存本次清单缓存
-        uses: actions/cache/save@v5
-        if: steps.compile.outputs.status == 'success' && !cancelled()
-        with:
-          path: /tmp/manifest_cache
-          key: lede-manifest-${{ github.run_id }}
 
       - name: 上传固件至 GitHub Artifacts
         uses: actions/upload-artifact@v6
@@ -220,6 +300,7 @@ jobs:
             ${{ env.FIRMWARE_PATH }}/sha256sums.txt
             ${{ env.FIRMWARE_PATH }}/packages-manifest.txt
             ${{ env.FIRMWARE_PATH }}/manifest-diff.txt
+            ${{ env.FIRMWARE_PATH }}/*.buildinfo
 
       - name: 生成 Release 发布信息
         id: tag
@@ -249,3 +330,4 @@ jobs:
             ${{ env.FIRMWARE_PATH }}/sha256sums.txt
             ${{ env.FIRMWARE_PATH }}/packages-manifest.txt
             ${{ env.FIRMWARE_PATH }}/manifest-diff.txt
+            ${{ env.FIRMWARE_PATH }}/*.buildinfo

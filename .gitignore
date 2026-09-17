@@ -4,6 +4,7 @@ lede/
 bin/
 dl/
 output/
+input/
 
 # 临时与日志文件
 *.tmp
