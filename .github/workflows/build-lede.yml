@@ -28,7 +28,7 @@ permissions:
 env:
   REPO_URL: https://github.com/coolsnowwolf/lede.git
   REPO_BRANCH: master
-  CONFIG_FILE: config/LEDE.config
+  CONFIG_FILE: config/custom.config
   CUSTOM_FEEDS_SH: scripts/custom_feeds.sh
   FILES_DIR: files
   TZ: Asia/Shanghai

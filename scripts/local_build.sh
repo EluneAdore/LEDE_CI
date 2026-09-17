@@ -66,12 +66,12 @@ echo ">> 更新并安装 Feeds ..."
 ./scripts/feeds install -a
 
 # 6. 同步配置文件
-echo ">> 注入 config/LEDE.config ..."
-if [ ! -f "${PROJECT_ROOT}/config/LEDE.config" ]; then
-    echo "❌ 错误: 未找到 ${PROJECT_ROOT}/config/LEDE.config !"
+echo ">> 注入 config/custom.config ..."
+if [ ! -f "${PROJECT_ROOT}/config/custom.config" ]; then
+    echo "❌ 错误: 未找到 ${PROJECT_ROOT}/config/custom.config !"
     exit 1
 fi
-cp "${PROJECT_ROOT}/config/LEDE.config" .config
+cp "${PROJECT_ROOT}/config/custom.config" .config
 
 # 7. 同步 files/ 覆盖目录 (首次开机配置均集中于 files/etc/uci-defaults/99-custom-defaults)
 echo ">> 注入 files/ 目录 ..."

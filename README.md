@@ -40,7 +40,7 @@ LEDE_CI/
 │   └── workflows/
 │       └── build-lede.yml            # GitHub Actions 自动化编译工作流
 ├── config/
-│   └── LEDE.config                   # 核心编译配置文件 (.config)
+│   └── custom.config                 # 自定义编译配置 Seed (.config)
 ├── files/
 │   └── etc/
 │       └── uci-defaults/
@@ -118,7 +118,7 @@ LEDE_CI/
 ## 维护与配置调整
 
 * **调整软件包/驱动**：
-  在本地通过 `make menuconfig` 调整后，将生成的 `.config` 覆盖保存至 `config/LEDE.config` 即可。
+  在本地通过 `make menuconfig` 调整后，将生成的 `.config` 覆盖保存至 `config/custom.config` 即可。
 * **调整默认网络与预设**：
   所有网络、IP、IPv6、主机名、时区等自定义配置，统一在 `files/etc/uci-defaults/99-custom-defaults` 中维护。
 * **添加第三方 Feed 软件源**：
