@@ -64,6 +64,19 @@ fi
 echo ">> 更新并安装 Feeds ..."
 ./scripts/feeds update -a
 ./scripts/feeds install -a
+echo ">> 固定使用 helloworld 软件源提供的 xray-core..."
+./scripts/feeds uninstall xray-core
+./scripts/feeds install -f -p helloworld xray-core
+
+# 校验 xray-core 来源必须为 helloworld
+XRAY_PATH="$(readlink -f package/feeds/*/xray-core 2>/dev/null || true)"
+echo ">> 生效的 xray-core 路径: ${XRAY_PATH}"
+if [[ "${XRAY_PATH}" != *"/feeds/helloworld/"* ]]; then
+    echo "❌ 错误: xray-core 来源校验失败，预期来源为 helloworld，实际为: ${XRAY_PATH}"
+    exit 1
+fi
+XRAY_VER="$(grep -m1 '^PKG_VERSION:=' "${XRAY_PATH}/Makefile" | cut -d= -f2)"
+echo "✅ xray-core 来源校验通过 (helloworld feed, 版本: ${XRAY_VER})"
 
 # 6. 同步配置文件
 echo ">> 注入 config/custom.config ..."
