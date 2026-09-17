@@ -1,4 +1,6 @@
-name: LEDE-CI
+name: LEDE 固件编译
+run-name: >-
+  LEDE 固件编译 · ${{ github.event_name == 'workflow_dispatch' && '手动触发' || github.event_name == 'schedule' && '定时构建' || '自动触发' }}
 
 'on':
   repository_dispatch:
