@@ -210,19 +210,21 @@ echo ">> 整理固件产物至 ${OUTPUT_DIR} ..."
 TARGET_BIN_DIR="${LEDE_SRC_DIR}/bin/targets/x86/64"
 if [ -d "${TARGET_BIN_DIR}" ]; then
     # 清单差异对比 (如果 output/ 目录下已有上次构建留存的 manifest)
-    PREV_MANIFEST="$(find "${OUTPUT_DIR}" -maxdepth 1 -type f -name "*.manifest" 2>/dev/null | head -n 1)"
+    PREV_MANIFEST="$(find "${OUTPUT_DIR}" -maxdepth 1 -type f \( -name "packages-manifest.txt" -o -name "*.manifest" \) 2>/dev/null | head -n 1)"
     CURR_MANIFEST="$(find "${TARGET_BIN_DIR}" -maxdepth 1 -type f -name "*.manifest" 2>/dev/null | head -n 1)"
     if [ -n "${PREV_MANIFEST}" ] && [ -n "${CURR_MANIFEST}" ] && [ -f "${PROJECT_ROOT}/scripts/diff_manifest.py" ]; then
         echo ">> 对比上次编译清单差异 ..."
         python3 "${PROJECT_ROOT}/scripts/diff_manifest.py" \
             "${PREV_MANIFEST}" \
             "${CURR_MANIFEST}" \
-            --output-diff "${OUTPUT_DIR}/manifest-diff.txt"
+            --output-diff "${OUTPUT_DIR}/manifest-diff.txt" \
+            --summary
     fi
 
     # 复制主固件、软件包清单、配置文件与可追溯信息
     find "${TARGET_BIN_DIR}" -type f -name "*generic-squashfs-combined-efi.img.gz" -exec cp {} "${OUTPUT_DIR}/" \;
     find "${TARGET_BIN_DIR}" -type f -name "*.manifest" -exec cp {} "${OUTPUT_DIR}/" \;
+    find "${TARGET_BIN_DIR}" -type f -name "*.manifest" -exec cp {} "${OUTPUT_DIR}/packages-manifest.txt" \;
     find "${TARGET_BIN_DIR}" -type f -name "*.buildinfo" -exec cp {} "${OUTPUT_DIR}/" \; || true
     find "${TARGET_BIN_DIR}" -type f -name "profiles.json" -exec cp {} "${OUTPUT_DIR}/" \; || true
 

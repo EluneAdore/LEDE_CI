@@ -26,6 +26,7 @@ concurrency:
 
 permissions:
   contents: write
+  actions: read
 
 env:
   REPO_URL: https://github.com/coolsnowwolf/lede.git
@@ -43,6 +44,15 @@ jobs:
     steps:
       - name: 检出代码仓库
         uses: actions/checkout@v5
+
+      - name: 恢复软件包清单历史缓存 (用于差分对比兜底)
+        uses: actions/cache/restore@v4
+        id: cache-manifest
+        with:
+          path: /tmp/manifest_cache
+          key: lede-manifest-${{ github.run_id }}
+          restore-keys: |
+            lede-manifest-
 
       - name: 初始化编译环境
         env:
@@ -296,21 +306,82 @@ jobs:
 
           echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
 
-          # 获取上一个 Release 的历史 manifest (若存在)
+          # 多级弹性获取上一个版本的 packages-manifest.txt 基线
+          HIST_MANIFEST="/tmp/history_manifest/packages-manifest.txt"
           mkdir -p /tmp/history_manifest
-          if command -v gh >/dev/null 2>&1; then
-            echo ">> 尝试通过 GitHub CLI 从最新 Release 获取历史 packages-manifest.txt..."
-            GH_TOKEN="${{ secrets.GITHUB_TOKEN }}" gh release download \
-              --pattern "packages-manifest.txt" \
-              --dir /tmp/history_manifest 2>/dev/null || true
+          FOUND_BASELINE=0
+
+          # 策略 1: 尝试从上一次成功的 Actions Run Artifacts 中拉取
+          if [ "$FOUND_BASELINE" -eq 0 ] && command -v gh >/dev/null 2>&1; then
+            echo ">> [1/3] 尝试通过 GitHub CLI 从最近一次成功的 Actions 运行获取历史 manifest..."
+            export GH_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+            PREV_RUN_ID="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "build-lede.yml" --status success --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)"
+            if [ -n "$PREV_RUN_ID" ]; then
+              echo "   定位到最近成功运行 Run ID: $PREV_RUN_ID"
+              TMP_ART_DIR="/tmp/prev_artifacts"
+              mkdir -p "$TMP_ART_DIR"
+              if gh run download "$PREV_RUN_ID" --repo "$GITHUB_REPOSITORY" --dir "$TMP_ART_DIR" 2>&1; then
+                FOUND_FILE="$(find "$TMP_ART_DIR" -type f -name "packages-manifest.txt" 2>/dev/null | head -n 1)"
+                if [ -n "$FOUND_FILE" ] && [ -s "$FOUND_FILE" ]; then
+                  cp -f "$FOUND_FILE" "$HIST_MANIFEST"
+                  FOUND_BASELINE=1
+                  echo "   ✅ 成功从 Run $PREV_RUN_ID 的 Artifact 中获取历史 manifest (包数量: $(wc -l < "$HIST_MANIFEST"))"
+                else
+                  echo "   ℹ️ Run $PREV_RUN_ID 的 Artifact 中未找到有效的 packages-manifest.txt"
+                fi
+              else
+                echo "   ⚠️ 下载 Run $PREV_RUN_ID 的 Artifact 失败"
+              fi
+              rm -rf "$TMP_ART_DIR"
+            else
+              echo "   ℹ️ 未查询到历史成功的 Actions 运行记录"
+            fi
           fi
 
-          # 软件包清单差分比对 (对比历史 Release，并写入 Step Summary)
+          # 策略 2: 尝试从最新的 GitHub Release 中获取 (显式绑定当前仓库)
+          if [ "$FOUND_BASELINE" -eq 0 ] && command -v gh >/dev/null 2>&1; then
+            echo ">> [2/3] 尝试通过 GitHub CLI 从最新 Release 获取历史 manifest..."
+            export GH_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+            if gh release download --repo "$GITHUB_REPOSITORY" --pattern "packages-manifest.txt" --dir /tmp/history_manifest 2>&1; then
+              if [ -s "$HIST_MANIFEST" ]; then
+                FOUND_BASELINE=1
+                echo "   ✅ 成功从最新 Release 获取历史 manifest (包数量: $(wc -l < "$HIST_MANIFEST"))"
+              else
+                echo "   ℹ️ 最新 Release 下载成功但 packages-manifest.txt 为空"
+              fi
+            else
+              echo "   ℹ️ 当前仓库尚无 Release 或 Release 中不包含 packages-manifest.txt"
+            fi
+          fi
+
+          # 策略 3: 尝试从 actions/cache 恢复的缓存中提取兜底
+          if [ "$FOUND_BASELINE" -eq 0 ]; then
+            echo ">> [3/3] 检查 actions/cache 恢复的历史清单缓存..."
+            if [ -s "/tmp/manifest_cache/packages-manifest.txt" ]; then
+              cp -f "/tmp/manifest_cache/packages-manifest.txt" "$HIST_MANIFEST"
+              FOUND_BASELINE=1
+              echo "   ✅ 成功从 actions/cache 恢复历史 manifest (包数量: $(wc -l < "$HIST_MANIFEST"))"
+            else
+              echo "   ℹ️ 未检测到有效 actions/cache 历史清单"
+            fi
+          fi
+
+          if [ "$FOUND_BASELINE" -eq 1 ]; then
+            echo ">> 历史基线清单获取完成，开始执行差分比对..."
+          else
+            echo ">> ℹ️ 所有历史来源均无基线记录，本次构建将被记录为首次构建基准。"
+          fi
+
+          # 软件包清单差分比对 (输出文本报告并写入 Step Summary)
           python3 $GITHUB_WORKSPACE/scripts/diff_manifest.py \
-            /tmp/history_manifest/packages-manifest.txt \
+            "$HIST_MANIFEST" \
             packages-manifest.txt \
             --output-diff manifest-diff.txt \
             --summary
+
+          # 准备持久化缓存文件 (供后续 actions/cache/save 保存)
+          mkdir -p /tmp/manifest_cache
+          cp -f packages-manifest.txt /tmp/manifest_cache/packages-manifest.txt
 
           # 生成 SHA256 校验文件 (针对最终重命名后的固件生成，带 .txt 后缀)
           sha256sum *combined-efi*.img.gz > sha256sums.txt 2>/dev/null || true
@@ -319,6 +390,13 @@ jobs:
           rm -f openwrt-*.img* openwrt-*.manifest openwrt-*.bin
 
           echo "status=success" >> $GITHUB_OUTPUT
+
+      - name: 保存本次软件包清单缓存
+        uses: actions/cache/save@v4
+        if: steps.organize.outputs.status == 'success' && !cancelled()
+        with:
+          path: /tmp/manifest_cache
+          key: lede-manifest-${{ github.run_id }}
 
       - name: 上传固件至 GitHub Artifacts
         uses: actions/upload-artifact@v6
